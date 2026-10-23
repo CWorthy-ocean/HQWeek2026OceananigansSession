@@ -7,7 +7,7 @@ deps/deps.jl
 Manifest.toml
 Manifest-v*.toml
 LocalPreferences.toml
-
+data/*
 # Swap files.
 *.swp
 *~
@@ -82,3 +82,4 @@ sandbox/
 
 # Local git worktrees
 .worktrees/
+*.csv
