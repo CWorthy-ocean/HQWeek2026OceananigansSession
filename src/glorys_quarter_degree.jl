@@ -20,7 +20,7 @@ import Downloads
 
 struct GLORYSQuarterDegree end
 
-const glorys_quarter_degree_directory = joinpath(@__DIR__, "..", "..", "OceananigansHQWeek2026", "data", "GLORYS", "glorys_3d")
+const glorys_quarter_degree_directory = joinpath(@__DIR__, "..", "data", "GLORYS", "glorys_3d")
 const glorys_quarter_degree_first_date = DateTime(2010, 1, 1)   # metal/regrid_glorys_3d.jl's GLORYS_FIRST_DATE
 
 const GLORYSQuarterDegreeMetadatum = Metadatum{<:GLORYSQuarterDegree}

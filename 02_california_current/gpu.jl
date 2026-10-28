@@ -4,6 +4,9 @@
 # 666 × 648 × 42, ≈ 2.1–2.7 km in x, 3.1 km in y, Δt = 5 min; 2010–2011 took 12.9 h on one H100), reading the workshop
 # data instead of downloading: GLORYS from the 1/4° files (`GLORYSQuarterDegree`, not daily 1/12° GLORYS) and JRA55 cut
 # to the region (`RegionalJRA55`). Unlike metal.jl it runs in Float64 and needs none of the Metal workarounds.
+#
+# Needs CUDA 6.4.2 without Metal: first run `]rm Metal; ]add CUDA@6.4.2` in the project (see the README).
+#
 # Run with
 #
 #     julia --project --threads=4 02_california_current/gpu.jl

@@ -12,6 +12,7 @@ ConservativeRegridding = "8e50ac2c-eb48-49bc-a402-07c87b949343"
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 Downloads = "f43a241f-c20a-4ad4-852c-f6b1247861c6"
 GPUArrays = "0c68f7d7-f131-5f86-a1c3-88cf8149b2d7"
+GeoMakie = "db073c08-6b98-4ee5-b6a4-5efafb3259c6"
 Metal = "dde4c033-4e86-420c-a63e-0dd931031962"
 NCDatasets = "85f8d34a-cbdd-5861-8df4-14fed0d494ab"
 NumericalEarth = "904d977b-046a-4731-8b86-9235c0d1ef02"
@@ -24,9 +25,9 @@ WorldOceanAtlasTools = "04f20302-f1b9-11e8-29d9-7d841cb0a64a"
 
 [sources]
 ClimaSeaIce = {rev = "eb066d0dcc0ef3a0ba3afe298d36223bbc3612e6", url = "https://github.com/jagoosw/ClimaSeaIce.jl.git"}
+NumericalEarth = {rev = "23a5c5653abf1f7a87e86f9200ce26ac92579408", url = "https://github.com/NumericalEarth/NumericalEarth.jl"}
 NumericalOcean = {rev = "28f9576b8da6df148355853d8517fcde6fe7398c", url = "https://github.com/jagoosw/NumericalOcean.git"}
 OMIPSimulations = {rev = "23a5c5653abf1f7a87e86f9200ce26ac92579408", subdir = "experiments/OMIPSimulations", url = "https://github.com/NumericalEarth/NumericalEarth.jl.git"}
-NumericalEarth ={rev = "23a5c5653abf1f7a87e86f9200ce26ac92579408", url = "https://github.com/NumericalEarth/NumericalEarth.jl"}
 OceanBioME = {rev = "9a84a1e2126b308accd4ffd6a696cae3eac56235", url = "https://github.com/OceanBioME/OceanBioME.jl.git"}
 Oceananigans = {rev = "bcf12cd43063ea229b8b7b6f3e20e62ead813e41", url = "https://github.com/Clima/Oceananigans.jl.git"}
 SeawaterPolynomials = {rev = "b0e4297d89772171574210c9fbdd7703f40450ba", url = "https://github.com/clima/SeawaterPolynomials.jl.git"}
@@ -40,6 +41,7 @@ ConservativeRegridding = "0.2.18"
 Dates = "1.11.0"
 Downloads = "1.7.0"
 GPUArrays = "11.5.16"
+GeoMakie = "0.7.18"
 Metal = "1.11.1"
 NCDatasets = "0.14.15"
 NumericalEarth = "0.8.1"

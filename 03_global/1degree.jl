@@ -1,4 +1,6 @@
-using NumericalOcean # my wrapper package - likely to change 
+# NVIDIA GPU (CUDA) only. Needs CUDA 6.4.2 without Metal: first run `]rm Metal; ]add CUDA@6.4.2` in the project (see the README)
+
+using NumericalOcean # my wrapper package - likely to change
 using NumericalEarth
 using Oceananigans
 using Oceananigans.Units
