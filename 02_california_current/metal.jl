@@ -23,7 +23,7 @@ Oceananigans.defaults.FloatType = Float32   # Metal has no Float64
 #####
 
 arch       = GPU(Metal.MetalBackend())
-resolution = 1/4               # degrees
+resolution = 1/4               # degrees; for 1/2°, set Δt = 120minutes below
 longitude  = (-134, -115.5)    # °E
 latitude   = (30, 48)          # °N
 Nz         = 42                
@@ -51,8 +51,7 @@ bottom_height = regrid_bathymetry(underlying_grid; minimum_depth = 10, major_bas
 grid = ImmersedBoundaryGrid(underlying_grid, GridFittedBottom(bottom_height);
                             active_cells_map = true)
 
-Δt         = 30minutes
-initial_Δt = 2minutes               # the run starts at this and ramps up to Δt
+Δt         = 60minutes          # from the start (no ramp); tested stable at 1/4°. At 1/2°, 120minutes is stable
 start_date = DateTime(2010, 1, 1)   # time 0 of the GLORYS boundary files; the clock starts on 1 January
 run_length = 730days                # 2010 spin-up (both carbonate systems identical), then the release through 2011
 
@@ -72,12 +71,10 @@ vᵉ = FieldTimeSeries(Metadata(:v_velocity;   glorys_kwargs...), grid; time_ind
 ##### Atmosphere, radiation and rivers - usually `JRA55PrescribedAtmosphere(arch; dataset = MultiYearJRA55(), region, ...)`
 ##### reading the global JRA55 files, but this is JRA55 already cut to the region (`RegionalJRA55`, data/JRA55_region)
 #####
-pCO₂ = MaunaLoaCO₂(arch; FT = Float32,
-                   start_date, end_date)
 
 jra55_kwargs = (dataset = RegionalJRA55(), start_date, end_date)
 
-atmosphere = JRA55PrescribedAtmosphere(arch; jra55_kwargs..., tracers = (; pCO₂), time_indices_in_memory = 24)
+atmosphere = JRA55PrescribedAtmosphere(arch; jra55_kwargs..., time_indices_in_memory = 24, prefetch = false)
 radiation  = JRA55PrescribedRadiation(arch; jra55_kwargs..., time_indices_in_memory = 24)
 
 # Rivers: mouths searched within 5 grid cells and spread over 1.2° (`maximum_search_radius` is converted from cells to
@@ -86,20 +83,11 @@ search_radius = 5 * resolution / ((360 / Nx + 180 / Ny) / 2)
 land = JRA55PrescribedLand(grid; jra55_kwargs..., spread_radius = 1.2, maximum_search_radius = search_radius)
 
 #####
-##### Bottom drag: quadratic, with a log-layer drag coefficient Cd = [κ / ln(1 + Δz / 2z₀)]² for the bottom cell, z₀ = 1 cm
+##### Bottom drag: quadratic, with a log-layer drag coefficient for the bottom cell (src/boundary_functions.jl);
+##### κ is the von Kármán constant and z₀ = 1 cm the roughness length
 #####
 
-using Oceananigans.Operators: Δzᶠᶜᶜ, Δzᶜᶠᶜ
-using NumericalEarth.Oceans: spᶠᶜᶜ, spᶜᶠᶜ
-
 drag_parameters = (κ = 0.41f0, z₀ = 0.01f0)
-
-@inline log_layer_Cd(Δz, p) = (p.κ / log(1 + Δz / (2 * p.z₀)))^2
-
-@inline u_bottom_drag(i, j, grid, clock, Φ, p) = - log_layer_Cd(Δzᶠᶜᶜ(i, j, 1, grid), p) * spᶠᶜᶜ(i, j, 1, grid, Φ, 0)
-@inline v_bottom_drag(i, j, grid, clock, Φ, p) = - log_layer_Cd(Δzᶜᶠᶜ(i, j, 1, grid), p) * spᶜᶠᶜ(i, j, 1, grid, Φ, 0)
-@inline u_immersed_drag(i, j, k, grid, clock, Φ, p) = - log_layer_Cd(Δzᶠᶜᶜ(i, j, k, grid), p) * spᶠᶜᶜ(i, j, k, grid, Φ, 0)
-@inline v_immersed_drag(i, j, k, grid, clock, Φ, p) = - log_layer_Cd(Δzᶜᶠᶜ(i, j, k, grid), p) * spᶜᶠᶜ(i, j, k, grid, Φ, 0)
 
 #####
 ##### Open boundaries (west, south and north; the east edge is the coast)
@@ -110,37 +98,13 @@ drag_parameters = (κ = 0.41f0, z₀ = 0.01f0)
 #####
 
 using Oceananigans.BoundaryConditions: ObliqueRadiation, TracerReservoir
-using Oceananigans.Grids: immersed_peripheral_node, immersed_inactive_node, node
 
-@inline x_boundary(j, k, grid, clock, fields, p) = @inbounds p.ψ[p.i, j, k, Time(clock.time)]
-@inline y_boundary(i, k, grid, clock, fields, p) = @inbounds p.ψ[i, p.j, k, Time(clock.time)]
-
-# The barotropic substeps' clock time is Float64, which Metal kernels cannot use: the Flather functions read the time
-# from `barotropic_time` instead, set at the end of every step (see src/metal_hacks.jl)
+# The exterior values (`x_boundary`, `y_boundary`), Flather (`x_flather`, `y_flather`) and drag functions are in
+# src/boundary_functions.jl
+# The barotropic substeps' clock time is Float64, which Metal kernels cannot use: the Flather functions
+# (`x_flather`, `y_flather`, src/boundary_functions.jl) read the time from `barotropic_time` instead, set at the end of
+# every step (see src/metal_hacks.jl)
 barotropic_time = barotropic_time_array(arch)
-
-# GLORYS has no depth-mean velocity, so the exterior transport is GLORYS u (or v) integrated over the wet cells
-@inline function x_flather(j, k, grid, clock, fields, p)
-    n = Time(@inbounds p.time[1])
-    U = zero(grid)
-    for k′ in 1:grid.Nz
-        dry = immersed_peripheral_node(p.face, j, k′, grid, Face(), Center(), Center()) |
-              immersed_inactive_node(p.face, j, k′, grid, Face(), Center(), Center())
-        U += ifelse(dry, zero(grid), @inbounds(p.u[p.i, j, k′, n]) * Δzᶠᶜᶜ(p.face, j, k′, grid))
-    end
-    return (U, @inbounds p.η[p.i, j, 1, n])
-end
-
-@inline function y_flather(i, k, grid, clock, fields, p)
-    n = Time(@inbounds p.time[1])
-    V = zero(grid)
-    for k′ in 1:grid.Nz
-        dry = immersed_peripheral_node(i, p.face, k′, grid, Center(), Face(), Center()) |
-              immersed_inactive_node(i, p.face, k′, grid, Center(), Face(), Center())
-        V += ifelse(dry, zero(grid), @inbounds(p.v[i, p.j, k′, n]) * Δzᶜᶠᶜ(i, p.face, k′, grid))
-    end
-    return (V, @inbounds p.η[i, p.j, 1, n])
-end
 
 Δy = grid.radius * deg2rad(resolution)              # grid spacing normal to the south and north edges
 Δx = Δy * cosd((latitude[1] + latitude[2]) / 2)     # and normal to the west edge (at the middle latitude)
@@ -185,13 +149,8 @@ boundary_conditions = (u = u_bcs, v = v_bcs, T = T_bcs, S = S_bcs, U = U_bcs, V 
 
 #####
 ##### Sponge: viscosity and diffusivity rising linearly to Δx/10 m² s⁻¹ over the 1.6° inside each open boundary
+##### (`sponge_coefficient`, src/boundary_functions.jl)
 #####
-
-@inline function sponge_coefficient(i, j, k, grid, ℓx, ℓy, ℓz, clock, fields, p)
-    λ, φ, _ = node(i, j, k, grid, ℓx, ℓy, ℓz)
-    n = min(λ - p.west, φ - p.south, p.north - φ) / p.Δ + 0.5f0  # cells from the edge: 1 at the first interior point
-    return p.ν * max(0, 1 - n / p.width)
-end
 
 sponge = HorizontalScalarDiffusivity(ν = sponge_coefficient, κ = sponge_coefficient, discrete_form = true,
                                      parameters = (west = Float32(longitude[1]), south = Float32(latitude[1]), north = Float32(latitude[2]),
@@ -211,11 +170,17 @@ catke = CATKEVerticalDiffusivity(; mixing_length = CATKEMixingLength(Cᵇ = 0.01
 ##### Surface salinity restoring to the annual WOA climatology, piston velocity 1/6 m day⁻¹ over the top cell
 #####
 
-using NumericalEarth.DataWrangling: SurfaceFluxRestoring
+using NumericalEarth.DataWrangling: SurfaceFluxRestoring, oceananigans_fieldnames
 using WorldOceanAtlasTools # loads the NumericalEarth WOA extension
 
+# `DatasetRestoring` restores towards a time series, so the annual climatology is a series of one time, on the model grid
+using Oceananigans.OutputReaders: Clamp
+
+S★ = FieldTimeSeries{Center, Center, Center}(grid, [0f0]; time_indexing = Clamp())
+set!(S★[1], Metadatum(:salinity; dataset = WOAAnnual()))
+
 Δz_top = minimum_zspacing(underlying_grid)
-S_restoring = DatasetRestoring(Metadatum(:salinity; dataset = WOAAnnual()), arch; rate = 1 / 6 / (Δz_top * days))
+S_restoring = DatasetRestoring(S★, nothing, 1, oceananigans_fieldnames[:salinity], Float32(1 / 6 / (Δz_top * days)))
 
 #####
 ##### Ocean
@@ -241,11 +206,7 @@ set!(ocean.model; T = Tᵉ[1], S = Sᵉ[1], u = uᵉ[1], v = vᵉ[1], η = ηᵉ
 #####
 
 coupled = OceanOnlyModel(ocean; atmosphere, radiation, land)
-simulation = Simulation(coupled; Δt = initial_Δt, stop_time = run_length)
-
-# Ramp the time step up from `initial_Δt`, doubling every 3 simulated days until it reaches `Δt`
-ramp_time_step!(sim) = sim.Δt = min(Δt, initial_Δt * 2^(sim.model.clock.time / 3days))
-add_callback!(simulation, ramp_time_step!, IterationInterval(1))
+simulation = Simulation(coupled; Δt, stop_time = run_length)
 
 # The Flather boundary data's time (see `barotropic_time` above)
 add_callback!(simulation, sim -> set_barotropic_time!(barotropic_time, sim), IterationInterval(1))
@@ -265,11 +226,11 @@ add_callback!(simulation, progress, IterationInterval(100))
 ##### Output - daily surface snapshots (`TimeInterval`, see the note at the top of src/metal_hacks.jl)
 #####
 
-o = ocean.model
-surface = (T = view(o.tracers.T, :, :, Nz), S = view(o.tracers.S, :, :, Nz),
-           u = view(o.velocities.u, :, :, Nz), v = view(o.velocities.v, :, :, Nz),
-           η = o.free_surface.displacement)
-simulation.output_writers[:surface] = JLD2Writer(o, surface; dir = joinpath(@__DIR__, "output"), filename = "surface",
-                                                 schedule = TimeInterval(1day), including = [], overwrite_existing = true)
+ocean = ocean.model
+surface = (T = view(ocean.tracers.T, :, :, Nz), S = view(ocean.tracers.S, :, :, Nz),
+           u = view(ocean.velocities.u, :, :, Nz), v = view(ocean.velocities.v, :, :, Nz),
+           η = ocean.free_surface.displacement)
+simulation.output_writers[:surface] = JLD2Writer(ocean, surface; dir = joinpath(@__DIR__, "output"), filename = "surface",
+                                                 schedule = TimeInterval(1days), including = [], overwrite_files = true)
 
 run!(simulation)
