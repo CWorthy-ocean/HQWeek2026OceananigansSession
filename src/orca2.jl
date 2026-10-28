@@ -7,7 +7,8 @@
 # 1. It folds about T points, so the topology is `RightCenterFolded` with a `TPivot` zipper (PR #153 used the default
 #    UPivot pivot).
 # 2. `RightCenterFolded` has Ny y-faces rather than Ny + 1, so NumericalEarth's `halo_filled_data` would put NEMO V
-#    (the north face of T[:, j]) on the south face of T[:, j]. Here Face-y[:, 2:Ny] ← NEMO V/F[:, 1:Ny-1].
+#    (the north face of T[:, j]) on the south face of T[:, j]. Here the southernmost row(s), which are land, are removed
+#    and the south face of each kept row j is NEMO V/F[:, j - 1].
 # 3. The file has no duplicated east columns (`periodic_overlap = 0`).
 
 using Downloads: Downloads
@@ -39,18 +40,12 @@ function download_orca2(dir)
     return path
 end
 
-# Halo-filled copy of `data` at (LX, LY) on the RightCenterFolded helper grid. Face-y rows are shifted one north (2.).
+# Halo-filled copy of `data` (already aligned to the kept rows, see `ORCA2Grid`) at (LX, LY) on the RightCenterFolded
+# helper grid
 function orca2_halo_filled_data(data, helper_grid, bcs, LX, LY)
     Nx, Ny, _ = size(helper_grid)
     field = Field{LX, LY, Center}(helper_grid; boundary_conditions = bcs)
-
-    if LY === Face
-        field.data[1:Nx, 2:Ny, 1] .= data[1:Nx, 1:Ny-1]
-        field.data[1:Nx, 1, 1]    .= data[1:Nx, 1]       # southernmost row is land
-    else
-        field.data[1:Nx, 1:Ny, 1] .= data[1:Nx, 1:Ny]
-    end
-
+    field.data[1:Nx, 1:Ny, 1] .= data[1:Nx, 1:Ny]
     fill_halo_regions!(field)
 
     return deepcopy(dropdims(field.data, dims = 3))
@@ -65,7 +60,7 @@ orca2_halo_fill_stagger(CC, FC, CF, FF, helper_grid, bcs) =
 """
     ORCA2Grid(arch = CPU(), FT = Oceananigans.defaults.FloatType;
               z, Nz = 30, halo = (5, 5, 4), with_bathymetry = true, active_cells_map = true,
-              major_basins = Inf, dir = joinpath("data", "ORCA2"))
+              major_basins = Inf, south_rows_to_remove = 1, dir = joinpath("data", "ORCA2"))
 
 `OrthogonalSphericalShellGrid` with `(Periodic, RightCenterFolded, Bounded)` topology (T-pivot fold) from the NEMO 5
 ORCA2L75 domain_cfg: nominally 2°, refined meridionally to ~0.5° at the equator and near Antarctica, and to ~0.5° in
@@ -73,6 +68,8 @@ the Mediterranean, Red, Black and Caspian Seas. Coordinates, scale factors (incl
 `e1v`/`e2u`) and areas are read from the file; with `with_bathymetry = true` (the default) the domain_cfg's
 `bathy_metry` (m, positive down) is negated into a `GridFittedBottom` (m, positive up; land at +100 m) and an
 `ImmersedBoundaryGrid` is returned. `major_basins` keeps the largest connected basins, as in `ORCAGrid`.
+`south_rows_to_remove` (≥ 1) drops the southernmost rows, which are land: with at least one gone every kept row's south
+face is a NEMO V/F row (the first row has none in the file).
 """
 function ORCA2Grid(arch = CPU(), FT::DataType = Oceananigans.defaults.FloatType;
                    z,
@@ -82,7 +79,11 @@ function ORCA2Grid(arch = CPU(), FT::DataType = Oceananigans.defaults.FloatType;
                    with_bathymetry = true,
                    active_cells_map = true,
                    major_basins = Inf,
+                   south_rows_to_remove = 1,
                    dir = joinpath("data", "ORCA2"))
+
+    jr = south_rows_to_remove
+    jr ≥ 1 || throw(ArgumentError("south_rows_to_remove = $jr must be ≥ 1: NEMO has no south face for its first row"))
 
     path = download_orca2(dir)
 
@@ -91,13 +92,25 @@ function ORCA2Grid(arch = CPU(), FT::DataType = Oceananigans.defaults.FloatType;
     bathy_data = read_2d_nemo_variable(ds, "bathy_metry")
     close(ds)
 
-    Nx, Ny = size(mesh.λCC)
+    # Keep T rows jr+1:end. NEMO V/F[:, j] is the north face of T[:, j], so the south faces of the kept rows are
+    # V/F rows jr:end-1 (2.)
+    center_y(data) = data[:, jr+1:end]
+    face_y(data)   = data[:, jr:end-1]
+
+    λCC, λFC, λCF, λFF     = center_y(mesh.λCC),  center_y(mesh.λFC),  face_y(mesh.λCF),  face_y(mesh.λFF)
+    φCC, φFC, φCF, φFF     = center_y(mesh.φCC),  center_y(mesh.φFC),  face_y(mesh.φCF),  face_y(mesh.φFF)
+    e1t, e1u, e1v, e1f     = center_y(mesh.e1t),  center_y(mesh.e1u),  face_y(mesh.e1v),  face_y(mesh.e1f)
+    e2t, e2u, e2v, e2f     = center_y(mesh.e2t),  center_y(mesh.e2u),  face_y(mesh.e2v),  face_y(mesh.e2f)
+    AzCC, AzFC, AzCF, AzFF = center_y(mesh.AzCC), center_y(mesh.AzFC), face_y(mesh.AzCF), face_y(mesh.AzFF)
+    bathy_data = center_y(bathy_data)
+
+    Nx, Ny = size(λCC)
     Hx, Hy, Hz = halo
 
     pole_idx = argmin(mesh.φFF[:, end])
     north_poles_latitude  = Float64(mesh.φFF[pole_idx, end])
     first_pole_longitude  = Float64(mesh.λFF[pole_idx, end])
-    southernmost_latitude = Float64(minimum(mesh.φCC))
+    southernmost_latitude = Float64(minimum(φCC))
 
     topo = (Periodic, RightCenterFolded, Bounded)
     Lz, z_coord = generate_coordinate(FT, topo, (Nx, Ny, Nz), halo, z, :z, 3, CPU())
@@ -112,11 +125,11 @@ function ORCA2Grid(arch = CPU(), FT::DataType = Oceananigans.defaults.FloatType;
                                   top    = nothing,
                                   bottom = nothing)
 
-    λᶜᶜᵃ, λᶠᶜᵃ, λᶜᶠᵃ, λᶠᶠᵃ     = orca2_halo_fill_stagger(mesh.λCC,  mesh.λFC,  mesh.λCF,  mesh.λFF,  helper_grid, bcs)
-    φᶜᶜᵃ, φᶠᶜᵃ, φᶜᶠᵃ, φᶠᶠᵃ     = orca2_halo_fill_stagger(mesh.φCC,  mesh.φFC,  mesh.φCF,  mesh.φFF,  helper_grid, bcs)
-    Δxᶜᶜᵃ, Δxᶠᶜᵃ, Δxᶜᶠᵃ, Δxᶠᶠᵃ = orca2_halo_fill_stagger(mesh.e1t,  mesh.e1u,  mesh.e1v,  mesh.e1f,  helper_grid, bcs)
-    Δyᶜᶜᵃ, Δyᶠᶜᵃ, Δyᶜᶠᵃ, Δyᶠᶠᵃ = orca2_halo_fill_stagger(mesh.e2t,  mesh.e2u,  mesh.e2v,  mesh.e2f,  helper_grid, bcs)
-    Azᶜᶜᵃ, Azᶠᶜᵃ, Azᶜᶠᵃ, Azᶠᶠᵃ = orca2_halo_fill_stagger(mesh.AzCC, mesh.AzFC, mesh.AzCF, mesh.AzFF, helper_grid, bcs)
+    λᶜᶜᵃ, λᶠᶜᵃ, λᶜᶠᵃ, λᶠᶠᵃ     = orca2_halo_fill_stagger(λCC,  λFC,  λCF,  λFF,  helper_grid, bcs)
+    φᶜᶜᵃ, φᶠᶜᵃ, φᶜᶠᵃ, φᶠᶠᵃ     = orca2_halo_fill_stagger(φCC,  φFC,  φCF,  φFF,  helper_grid, bcs)
+    Δxᶜᶜᵃ, Δxᶠᶜᵃ, Δxᶜᶠᵃ, Δxᶠᶠᵃ = orca2_halo_fill_stagger(e1t,  e1u,  e1v,  e1f,  helper_grid, bcs)
+    Δyᶜᶜᵃ, Δyᶠᶜᵃ, Δyᶜᶠᵃ, Δyᶠᶠᵃ = orca2_halo_fill_stagger(e2t,  e2u,  e2v,  e2f,  helper_grid, bcs)
+    Azᶜᶜᵃ, Azᶠᶜᵃ, Azᶜᶠᵃ, Azᶠᶠᵃ = orca2_halo_fill_stagger(AzCC, AzFC, AzCF, AzFF, helper_grid, bcs)
 
     to_arch(data) = on_architecture(arch, map(FT, data))
 
@@ -146,12 +159,3 @@ function ORCA2Grid(arch = CPU(), FT::DataType = Oceananigans.defaults.FloatType;
     return ImmersedBoundaryGrid(underlying_grid, GridFittedBottom(bottom_field); active_cells_map)
 end
 
-# HACK: NumericalEarth 0.8.1 calls `north_fold_boundary_condition(grid)(-1)` (component_interfaces.jl:57), but
-# Oceananigans 0.113.6's signature is `north_fold_boundary_condition(grid, sign)`, so building the interface fluxes on
-# any tripolar grid fails. Same fix as NumericalEarth main, for RightCenterFolded tripolar grids only (a method more
-# specific than 0.8.1's, since overwriting it is not allowed during precompilation).
-using Oceananigans.OrthogonalSphericalShellGrids: TripolarGridOfSomeKind, north_fold_boundary_condition
-import NumericalEarth.EarthSystemModels.InterfaceComputations: vector_component_boundary_conditions
-
-vector_component_boundary_conditions(grid::TripolarGridOfSomeKind{<:Any, Periodic, RightCenterFolded}, loc) =
-    FieldBoundaryConditions(grid, loc; north = north_fold_boundary_condition(grid, -1))

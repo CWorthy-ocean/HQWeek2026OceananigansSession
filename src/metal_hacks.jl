@@ -16,9 +16,14 @@
 # 4. `barotropic_time_array(arch)` and `set_barotropic_time!(barotropic_time, sim)`: a Float32 clock time for
 #    functions called from the barotropic substeps (e.g. Flather boundary conditions).
 # 5. `surface_dataset_restoring(metadata, cpu_grid, grid; rate)`: DatasetRestoring of the top level only.
-# 7. `architecture_ready` for NetCDF data with missing values: missing → NaN on the host before the copy to Metal.
+# 7. NetCDF data with missing values moved or copied to Metal: missing → NaN on the host first.
 # 8. `cpu_interpolating_time_indices` on Metal: a Float32 time-interpolation weight for prescribed atmosphere/radiation.
-# 9. Float32 clocks in Metal kernels, roughness lengths and interface humidity: the atmosphere-ocean flux solver.
+# 9. Float32 clocks, roughness lengths, radiation surface properties and humidity: the atmosphere-ocean flux solver.
+# 10. `compute_mask` on Metal: Float32 bounds and mask value when a dataset is inpainted on the GPU.
+# 11. `on_architecture` of a `Vector{Float64}` to Metal: copied as Float32 (e.g. the uneven times of a monthly series).
+# 12. Float32 ZWENO weights that cannot overflow: τ / (β + ϵ) capped before squaring.
+# 13. OceanBioME air–sea O₂ and CO₂ exchange built in the grid's float type (OceanBioME defaults to Float64).
+# 12. Float32 carbon chemistry: the seawater density and the boron, sulfate and fluoride totals in the CO₂ gas exchange.
 
 using Metal: Metal, MtlDeviceVector, MtlDeviceArray
 using Oceananigans
@@ -116,14 +121,16 @@ end
 ##### 7. Dataset arrays with missing values
 #####
 
-# NetCDF variables with a fill value arrive as `Array{Union{Missing, Float32}}`, which NumericalEarth 0.8.1 copies to
-# the GPU as is (`architecture_ready`, DataWrangling/set_region_data.jl:211) and NaN-converts in the kernel
+# NetCDF variables with a fill value arrive as `Array{Union{Missing, Float32}}`, which NumericalEarth moves to the GPU
+# as is (`architecture_ready`, DataWrangling/set_region_data.jl:211, and `set_jra55_slices!`, which also `copyto!`s
+# each slice into a device buffer, JRA55/JRA55_field_time_series.jl:60) and NaN-converts in the kernel
 # (`nan_convert_missing`). Metal.jl 1.11.1 cannot hold isbits-union arrays ("MtlArray does not yet support isbits-union
 # arrays"), e.g. in every JRA55 FieldTimeSeries. Same missing → NaN, on the host first.
-import NumericalEarth.DataWrangling: architecture_ready
+Oceananigans.Architectures.on_architecture(arch::GPU{Metal.MetalBackend}, a::Array{Union{Missing, T}}) where T <: AbstractFloat =
+    on_architecture(arch, coalesce.(a, T(NaN)))
 
-architecture_ready(arch::GPU{Metal.MetalBackend}, data::AbstractArray{Union{Missing, T}}) where T <: AbstractFloat =
-    on_architecture(arch, coalesce.(data, T(NaN)))
+Base.copyto!(dst::Metal.MtlArray{T}, src::Array{Union{Missing, T}}) where T <: AbstractFloat =
+    copyto!(dst, coalesce.(src, T(NaN)))
 
 #####
 ##### 8. Float32 time-interpolation weight
@@ -138,53 +145,175 @@ using Oceananigans.OutputReaders: TimeInterpolator
 
 function cpu_interpolating_time_indices(::GPU{Metal.MetalBackend}, times::AbstractVector, time_indexing, t)
     ti = TimeInterpolator(time_indexing, on_architecture(CPU(), times), t)
-    return TimeInterpolator(Float32(ti.fractional_index), ti.first_index, ti.second_index, ti.length)
+    return TimeInterpolator(convert(Float32, ti.fractional_index), ti.first_index, ti.second_index, ti.length)
 end
 
 #####
 ##### 9. Float32 atmosphere-ocean flux solver
 #####
 
-# NumericalEarth 0.8.1's flux solver (`_compute_atmosphere_ocean_interface_state!`) meets Float64 three ways on Metal,
+# NumericalEarth 0.8.1's flux solver (`_compute_atmosphere_ocean_interface_state!`) meets Float64 four ways on Metal,
 # failing with "unsupported use of double value" and the type instability it causes; ported from the fixes in
 # ~/Documents/NumericalEarth.jl (jsw/oceanbiome-ext-changes, uncommitted):
 #
 # - its launch sites pass the model `clock` (Float64 time) where they should pass `convert_time(grid, clock)`. Here
 #   every Clock adapted to a Metal kernel gets Float32 times instead, as `convert_time` does (a no-op for Oceananigans'
 #   own kernels, which already convert);
-# - `MomentumRoughnessLength` and `ScalarRoughnessLength` keep the default `air_kinematic_viscosity = 1.5e-5` Float64;
+# - `MomentumRoughnessLength` and `ScalarRoughnessLength` keep the default `air_kinematic_viscosity = 1.5e-5` Float64
+#   (built by keyword defaults in several places, e.g. similarity_theory_turbulent_fluxes.jl:174), and
+#   `PrescribedRadiation`'s default surface albedos and emissivities are Float64 literals: both are converted as they
+#   are adapted to a Metal kernel, as the clock is;
 # - `default_ao_specific_humidity(ocean)` takes `eltype(ocean)`, which is `Any` for a `Simulation`, so 0.98 stays Float64.
 using Oceananigans.TimeSteppers: Clock
 using NumericalEarth.EarthSystemModels.InterfaceComputations: MomentumRoughnessLength, ScalarRoughnessLength,
-                                                              SimilarityScales, ImpureSaturationSpecificHumidity,
+                                                              ImpureSaturationSpecificHumidity,
                                                               AtmosphericThermodynamics
-import NumericalEarth.EarthSystemModels.InterfaceComputations: default_roughness_lengths, default_ao_specific_humidity
+using NumericalEarth.Radiations: SurfaceRadiationProperties
+import NumericalEarth.EarthSystemModels.InterfaceComputations: default_ao_specific_humidity
 using Oceananigans.TimeSteppers: Adapt # not a direct dependency of this project
 
 Adapt.adapt_structure(to::Metal.Adaptor, clock::Clock) =
-    (time          = Float32(clock.time),
-     last_Δt       = Float32(clock.last_Δt),
-     last_stage_Δt = Float32(clock.last_stage_Δt),
+    (time          = convert(Float32, clock.time),
+     last_Δt       = convert(Float32, clock.last_Δt),
+     last_stage_Δt = convert(Float32, clock.last_stage_Δt),
      iteration     = clock.iteration,
      stage         = clock.stage)
 
-function default_roughness_lengths(FT::Type{Float32})
-    ν = convert(FT, 1.5e-5) # m² s⁻¹
-    return SimilarityScales(MomentumRoughnessLength(FT; air_kinematic_viscosity = ν),
-                            ScalarRoughnessLength(FT; air_kinematic_viscosity = ν),
-                            ScalarRoughnessLength(FT; air_kinematic_viscosity = ν))
-end
+metal_float(x::Float64) = convert(Float32, x)
+metal_float(x) = x
+
+Adapt.adapt_structure(to::Metal.Adaptor, ℓ::MomentumRoughnessLength) =
+    MomentumRoughnessLength(ℓ.gravitational_acceleration,
+                            metal_float(Adapt.adapt(to, ℓ.air_kinematic_viscosity)),
+                            Adapt.adapt(to, ℓ.wave_formulation),
+                            ℓ.smooth_wall_parameter,
+                            ℓ.maximum_roughness_length)
+
+Adapt.adapt_structure(to::Metal.Adaptor, ℓ::ScalarRoughnessLength) =
+    ScalarRoughnessLength(metal_float(Adapt.adapt(to, ℓ.air_kinematic_viscosity)),
+                          Adapt.adapt(to, ℓ.reynolds_number_scaling_function),
+                          ℓ.maximum_roughness_length)
+
+Adapt.adapt_structure(to::Metal.Adaptor, s::SurfaceRadiationProperties) =
+    SurfaceRadiationProperties(metal_float(Adapt.adapt(to, s.albedo)), metal_float(Adapt.adapt(to, s.emissivity)))
 
 default_ao_specific_humidity(ocean::Simulation) =
     ImpureSaturationSpecificHumidity(AtmosphericThermodynamics.Liquid(), convert(eltype(ocean.model.grid), 0.98))
+
+#####
+##### 10. Inpainting masks without Float64
+#####
+
+# When a dataset has no inpainted cache, NumericalEarth 0.8.1 builds its land mask on the field's architecture with
+# Float64 bounds and mask value (`compute_mask`, DataWrangling/metadata_field.jl:507), which `is_masked` compares with
+# the Float32 data (metadata_field.jl:528): "unsupported use of double value" on Metal, e.g. inpainting monthly WOA
+# salinity for `DatasetRestoring`. Same mask, with the values in the field's float type.
+using Oceananigans.Architectures: architecture
+using NumericalEarth.DataWrangling: Metadatum
+import NumericalEarth.DataWrangling: compute_mask
+
+function compute_mask(metadata::Metadatum, field::Field, mask_value, minimum_value, maximum_value)
+    if architecture(field) isa GPU{Metal.MetalBackend}
+        FT = eltype(field)
+        mask_value isa Number && (mask_value = convert(FT, mask_value))
+        minimum_value = convert(FT, minimum_value)
+        maximum_value = convert(FT, maximum_value)
+    end
+    return invoke(compute_mask, Tuple{Metadatum, Any, Any, Any, Any},
+                  metadata, field, mask_value, minimum_value, maximum_value)
+end
+
+#####
+##### 11. Float64 vectors moved to Metal
+#####
+
+# A FieldTimeSeries with uneven times (e.g. monthly WOA salinity for `DatasetRestoring`) keeps them as a
+# `Vector{Float64}`, which Oceananigans#452409b moves to the GPU with the field (field_time_series.jl:288); its Metal
+# extension converts evenly spaced `StepRangeLen` times to Float32 but makes `MtlArray(::Vector{Float64})` of a vector,
+# which Metal cannot allocate ("Metal does not support Float64 values"). Copied as Float32 instead.
+Oceananigans.Architectures.on_architecture(arch::GPU{Metal.MetalBackend}, a::Vector{Float64}) =
+    on_architecture(arch, convert(Vector{Float32}, a))
+
+#####
+##### 12. ZWENO weights without Float32 overflow
+#####
+
+# Oceananigans' ZWENO weights are α = C★ (1 + (τ / (β + ϵ))²) with ϵ = 1f-8 (Advection/weno_interpolants.jl:372). The
+# divergence upwinding of `WENOVectorInvariant` reconstructs a transport divergence (m³ s⁻¹, ~10⁶ here), so β and τ are
+# ~10¹²; where one sub-stencil is flat (β = 0, e.g. all-immersed faces next to a bottom step) τ / ϵ ~ 10²⁰ and its
+# square overflows Float32 (max 3.4 × 10³⁸): α = Inf, the normalisation Inf × 0 = NaN, and the run blows up from one
+# point (seen at 38°E, 65.7°S after 110 days). Same weights with τ / (β + ϵ) capped at 10¹⁵, where that stencil already
+# takes all the weight. Fine in Float64, which never reaches the cap in practice.
+using Oceananigans.Advection: WENO, C★, ϵ, advection_buffers
+using Oceananigans.Utils: newton_div
+import Oceananigans.Advection: zweno_alpha_loop
+
+const max_zweno_ratio = convert(Float32, 1e15)
+
+# Unrolled as Oceananigans' `metaprogrammed_zweno_alpha_loop` (a `Val` built from a loop index does not compile on GPUs)
+for buffer in advection_buffers[2:end]
+    α = [:(C★(scheme, Val($(s - 1))) * (1 + min(newton_div(WCT, τ, β[$s] + ϵ), max_zweno_ratio)^2)) for s in 1:buffer]
+    @eval @inline zweno_alpha_loop(scheme::WENO{$buffer, Float32, WCT}, β, τ) where WCT = @inbounds ($(α...),)
+end
+
+#####
+##### 13. Air–sea gas exchange in the grid's float type
+#####
+
+# NumericalEarth#247c263's OceanBioME extension builds the O₂ and CO₂ gas exchanges with OceanBioME's defaults, which
+# are Float64 (`GarciaGordonOxygenSaturation()`, `CarbonChemistry()`, `FF{Float64}()`, ...; NumericalEarthOceanBioMEExt/
+# gas_exchange.jl:52-80), so the gas exchange kernel fails on Metal ("unsupported use of double value", in the
+# Schmidt number and solubility polynomials). Ported from the uncommitted fix in ~/Documents/NumericalEarth.jl-metal-dic
+# (on the same commit), which builds every parameterisation in `eltype(grid)`: these are the extension's methods with
+# `ocean::Simulation` (more specific than its untyped `ocean`, so nothing is overwritten).
+using OceanBioME: OxygenGasExchangeBoundaryCondition, CarbonDioxideGasExchangeBoundaryCondition
+using OceanBioME.Models.GasExchangeModel: GarciaGordonOxygenSaturation, CarbonDioxideAirConcentration,
+                                          MolPerKgPerAtmToMMolPerCubicMPerMicroAtm
+using OceanBioME.Models.CarbonChemistryModel: CarbonChemistry, FF
+using OceanBioME.Models.NutrientsPlanktonDetritusModels.OxygenModels: Oxygen
+using OceanBioME.Models.NutrientsPlanktonDetritusModels.InorganicCarbonModels: AbstractInorganicCarbon
+import NumericalEarth.EarthSystemModels.InterfaceComputations: biogeochemical_interface
+
+function biogeochemical_interface(exchanger, ocean::Simulation, ::Oxygen; gas_exchange_state, kwargs...)
+    FT = eltype(ocean.model.grid)
+    return (; O₂ = OxygenGasExchangeBoundaryCondition(FT;
+                       wind_speed = gas_exchange_state.wind_speed,
+                       air_concentration = GarciaGordonOxygenSaturation(FT; atmospheric_pressure = gas_exchange_state.atmospheric_pressure),
+                       kwargs...).condition.func)
+end
+
+biogeochemical_interface(exchanger, ocean::Simulation, ::AbstractInorganicCarbon{1}; kwargs...) =
+    (; DIC = float_type_carbon_dioxide_exchange(exchanger, :DIC, :Alk; grid = ocean.model.grid, kwargs...))
+
+function biogeochemical_interface(exchanger, ocean::Simulation, ::AbstractInorganicCarbon{N}; kwargs...) where N
+    names = ntuple(n -> Symbol(:DIC, n), Val(N))
+    exchanges = ntuple(n -> float_type_carbon_dioxide_exchange(exchanger, Symbol(:DIC, n), Symbol(:Alk, n); grid = ocean.model.grid, kwargs...), Val(N))
+    return NamedTuple{names}(exchanges)
+end
+
+function float_type_carbon_dioxide_exchange(exchanger, DIC, Alk; grid, gas_exchange_state, carbon_chemistry = CarbonChemistry(eltype(grid)), kwargs...)
+    FT = eltype(grid)
+    air_concentration = CarbonDioxideAirConcentration(FT; mole_fraction = exchanger.atmosphere.state.pCO₂,
+                                                          atmospheric_pressure = gas_exchange_state.atmospheric_pressure,
+                                                          solubility = MolPerKgPerAtmToMMolPerCubicMPerMicroAtm(FF{FT}(),
+                                                                                                                carbon_chemistry.density_function))
+    return CarbonDioxideGasExchangeBoundaryCondition(FT; grid,
+                                                     wind_speed = gas_exchange_state.wind_speed,
+                                                     air_concentration,
+                                                     carbon_chemistry,
+                                                     DIC, Alk,
+                                                     kwargs...).condition.func
+end
 
 # some timestepping nonsense
 # HACK: Oceananigans 0.113.6 converts the time step to the grid's float type before the kernels see it
 # (`kernel_time_step`, TimeSteppers/split_runge_kutta.jl); the jsw/for-oaemip branch (0.113.4) passes the Float64 Δt
 # on, which Metal rejects (in the vertically implicit diffusion solve). Convert it here instead, as 0.113.6 does.
+# Metal models only (the third type parameter is the architecture), so Float64 runs on CUDA or the CPU keep their Δt.
 import Oceananigans.Models.HydrostaticFreeSurfaceModels: rk_substep!, step_closure_prognostics!
-rk_substep!(model::HydrostaticFreeSurfaceModel, Δτ::Float64, callbacks) = rk_substep!(model, Float32(Δτ), callbacks)
-step_closure_prognostics!(model::HydrostaticFreeSurfaceModel, Δt::Float64) = step_closure_prognostics!(model, Float32(Δt))
+const MetalHydrostaticModel = HydrostaticFreeSurfaceModel{<:Any, <:Any, <:GPU{<:Metal.MetalBackend}}
+rk_substep!(model::MetalHydrostaticModel, Δτ::Float64, callbacks) = rk_substep!(model, Float32(Δτ), callbacks)
+step_closure_prognostics!(model::MetalHydrostaticModel, Δt::Float64) = step_closure_prognostics!(model, Float32(Δt))
 
 
 import Oceananigans.Architectures: on_architecture
@@ -209,4 +338,47 @@ end
 function Oceananigans.Architectures.on_architecture(::GPU{<:Metal.MetalBackend},
                                                     s::StepRangeLen{Float64, Base.TwicePrecision{Float64}, Base.TwicePrecision{Float64}})
     return StepRangeLen{Float32, Float32, Float32}(Float32(first(s)), Float32(step(s)), length(s))
+end
+
+#####
+##### 12. Float32 carbon chemistry for the air–sea CO₂ exchange
+#####
+
+# OceanBioME's carbon chemistry, which the CO₂ gas exchange solves at the surface, has two Float64 paths that Metal
+# rejects ("unsupported use of double value" in `compute_gas_exchange!`):
+# (1) The density (mol kg⁻¹ ↔ mmol m⁻³) is SeawaterPolynomials' TEOS-10 `_ρ`, whose reference profile `r₀` multiplies
+#     untyped Float64 constants. The same polynomial with the constants in Float32 (the anomaly `r′` is already typed);
+#     more specific than OceanBioME's `teos10_polynomial_approximation(T::FT, ...)`, so it only replaces it for Float32.
+# (2) The default boron, sulfate and fluoride totals (`0.000232 / 10.811 * S / 1.80655`, ...) are formed in Float64
+#     before `convert`. The same totals with the constants in the salinity's float type, passed explicitly (new methods
+#     for a `CarbonChemistry`, more specific than OceanBioME's, which leave it untyped).
+using SeawaterPolynomials.TEOS10: TEOS10, τ, s, ζ, r′
+import OceanBioME.Models: teos10_polynomial_approximation
+import OceanBioME.Models.GasExchangeModel: surface_CO₂
+using OceanBioME.Models.CarbonChemistryModel: CarbonChemistry
+
+@inline function f32_r₀(ζ)
+    R = (TEOS10.R₀₀, TEOS10.R₀₁, TEOS10.R₀₂, TEOS10.R₀₃, TEOS10.R₀₄, TEOS10.R₀₅)
+    return (((((Float32(R[6]) * ζ + Float32(R[5])) * ζ + Float32(R[4])) * ζ + Float32(R[3])) * ζ + Float32(R[2])) * ζ + Float32(R[1])) * ζ
+end
+
+@inline function teos10_polynomial_approximation(T::Float32, Sp, Pbar = 0, lon = 0, lat = 0)
+    Z = - 10 * Float32(Pbar)
+    τ₀, s₀, ζ₀ = τ(T), s(Float32(Sp)), ζ(Z)
+    return f32_r₀(ζ₀) + r′(τ₀, s₀, ζ₀)
+end
+
+@inline seawater_constituents(S::FT) where FT = (boron    = convert(FT, 0.000232 / 10.811 / 1.80655) * S,
+                                                 sulfate  = convert(FT, 0.14 / 96.062 / 1.80655) * S,
+                                                 fluoride = convert(FT, 0.000067 / 18.9984 / 1.80655) * S)
+
+@inline surface_CO₂(::Nothing, carbon_chemistry::CarbonChemistry, i, j; S, kwargs...) =
+    carbon_chemistry(; S, seawater_constituents(S)..., kwargs..., output = Val(:CO₂))
+
+@inline function surface_CO₂(pH, carbon_chemistry::CarbonChemistry, i, j; DIC, S, kwargs...)
+    pH⁻ = @inbounds pH[i, j, 1]
+    initial_pH_guess = ifelse((pH⁻ > 0) & (pH⁻ < 14), pH⁻, convert(typeof(DIC), 8))
+    CO₂, pHⁿ = carbon_chemistry(; DIC, S, seawater_constituents(S)..., kwargs..., initial_pH_guess, output = Val((:CO₂, :pHᶠ)))
+    @inbounds pH[i, j, 1] = pHⁿ
+    return CO₂
 end
