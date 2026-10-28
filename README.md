@@ -73,6 +73,8 @@ Or start a REPL from the repository root with `julia --project` and include the 
 include("01_isotropic_turbulence/isotropic_turbulence.jl")
 ```
 
+This is what the output looks like: the vorticity ζ as the random initial flow organises into vortices that merge and grow.
+
 https://github.com/user-attachments/assets/b482c92f-2b28-49bc-9f3b-5a877c1cd86a
 
 ### `02_california_current/` — regional California Current
@@ -99,9 +101,11 @@ include("02_california_current/metal.jl")
 include("02_california_current/plot_surface.jl")
 ```
 
-The included GLORYS data only covers this region and the 2010–2012 period. Running a larger region or period needs different data (usually `GLORYSDaily()` downloaded with CopernicusMarine). You can choose a region that is a subset of the example region (but bare in mind that I downsampled GLORYS to 1/4°).
+This is what the output of `metal.jl` looks like after `plot_surface.jl`: two years of daily surface temperature with the currents, salinity, surface speed and sea surface height anomaly.
 
 https://github.com/user-attachments/assets/cd25d625-6335-4270-bb6f-c0bb1ed8c80d
+
+The included GLORYS data only covers this region and the 2010–2012 period. Running a larger region or period needs different data (usually `GLORYSDaily()` downloaded with CopernicusMarine). You can choose a region that is a subset of the example region (but bare in mind that I downsampled GLORYS to 1/4°).
 
 ### `03_global/` — global ORCA2
 
@@ -121,15 +125,16 @@ julia --project 03_global/orca2_metal.jl
 julia --project 03_global/plot_surface.jl
 ```
 
-<img width="2800" height="1900" alt="image" src="https://github.com/user-attachments/assets/cf68eac3-fce7-4075-8baf-926cc19ed825" />
-
-
 Or start a REPL from the repository root with `julia --project` and include the files:
 
 ```julia
 include("03_global/orca2_metal.jl")
 include("03_global/plot_surface.jl")
 ```
+
+This is what the output of `orca2_metal.jl` looks like after `plot_surface.jl`. The top left panel is the temperature on the native ORCA2 grid, plotted by index, where the tripolar grid distorts the Northern Hemisphere. The other panels are temperature, salinity and surface speed regridded to 1/2° on a Robinson projection.
+
+<img width="2800" height="1900" alt="image" src="https://github.com/user-attachments/assets/cf68eac3-fce7-4075-8baf-926cc19ed825" />
 
 ### `src/` — the `HQWeek2026OceananigansSession` package
 
