@@ -8,7 +8,7 @@ using NumericalEarth
 using NumericalEarth.DataWrangling: SurfaceFluxRestoring
 using Oceananigans
 using Oceananigans.Units
-using HQWeek2026OceananigansWorkshop # hacks and shinanigans to get Metal to work for this setup, and ORCA2Grid
+using HQWeek2026OceananigansSession # hacks and shinanigans to get Metal to work for this setup, and ORCA2Grid
 using Printf
 using WorldOceanAtlasTools # loads the NumericalEarth WOA extension
 using OceanBioME

@@ -1,4 +1,4 @@
-module HQWeek2026OceananigansWorkshop
+module HQWeek2026OceananigansSession
 
 export on_metal, barotropic_time_array, set_barotropic_time!, surface_dataset_restoring
 export BGCInitClimatology, BGCInitSolubleIronDeposition, BGCInitDustIronDeposition
@@ -30,5 +30,5 @@ include("restart_state.jl")
 include("alkalinity_release.jl")
 include("light_attenuation.jl")  # from NumericalOcean
 
-end # module HQWeek2026OceananigansWorkshop
+end # module HQWeek2026OceananigansSession
 

@@ -6,7 +6,7 @@ using Metal
 using NumericalEarth
 using Oceananigans
 using Oceananigans.Units # just defines stuff like day = days = 24*60*60
-using HQWeek2026OceananigansWorkshop # hacks and shinanigans to get Metal to work for this setup
+using HQWeek2026OceananigansSession # hacks and shinanigans to get Metal to work for this setup
 using OceanBioME
 
 Oceananigans.defaults.FloatType = Float32   # Metal has no Float64

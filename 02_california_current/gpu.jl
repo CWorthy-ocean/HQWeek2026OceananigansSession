@@ -19,7 +19,7 @@ using CUDA
 using NumericalEarth
 using Oceananigans
 using Oceananigans.Units # just defines stuff like day = days = 24*60*60
-using HQWeek2026OceananigansWorkshop # the regional datasets and the boundary, drag and sponge functions
+using HQWeek2026OceananigansSession # the regional datasets and the boundary, drag and sponge functions
 
 #####
 ##### Warning: the GLORYS files cover -134:-115.5E and 30:48N for 2010–2012; a different region or period needs
