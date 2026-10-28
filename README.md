@@ -73,6 +73,8 @@ Or start a REPL from the repository root with `julia --project` and include the 
 include("01_isotropic_turbulence/isotropic_turbulence.jl")
 ```
 
+https://github.com/user-attachments/assets/b482c92f-2b28-49bc-9f3b-5a877c1cd86a
+
 ### `02_california_current/` — regional California Current
 
 These are regional hydrostatic models from 134–115.5° W and 30–48° N, 42 levels, 5500 m deep, for 2010–2011. They are forced by JRA55 (already cut to the region) and use open boundaries from GLORYS (downsampled to 1/4°) with Flather conditions and sponges. Salinity is restored to WOA.
@@ -97,7 +99,9 @@ include("02_california_current/metal.jl")
 include("02_california_current/plot_surface.jl")
 ```
 
-The included GLORYS data only covers this region and the 2010–2012 period. Running a different region or period needs different data (usually `GLORYSDaily()` downloaded with CopernicusMarine).
+The included GLORYS data only covers this region and the 2010–2012 period. Running a larger region or period needs different data (usually `GLORYSDaily()` downloaded with CopernicusMarine). You can choose a region that is a subset of the example region (but bare in mind that I downsampled GLORYS to 1/4°).
+
+https://github.com/user-attachments/assets/cd25d625-6335-4270-bb6f-c0bb1ed8c80d
 
 ### `03_global/` — global ORCA2
 
@@ -116,6 +120,9 @@ These are global ocean-only runs (no sea ice: temperature is clipped at the free
 julia --project 03_global/orca2_metal.jl
 julia --project 03_global/plot_surface.jl
 ```
+
+<img width="2800" height="1900" alt="image" src="https://github.com/user-attachments/assets/cf68eac3-fce7-4075-8baf-926cc19ed825" />
+
 
 Or start a REPL from the repository root with `julia --project` and include the files:
 
