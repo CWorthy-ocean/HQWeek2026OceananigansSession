@@ -12,7 +12,8 @@ using HQWeek2026OceananigansWorkshop # hacks and shinanigans to get Metal to wor
 using Printf
 using WorldOceanAtlasTools # loads the NumericalEarth WOA extension
 
-Oceananigans.defaults.FloatType = Float32   # Metal has no Float64
+const FT = Float32                     # Metal has no Float64
+Oceananigans.defaults.FloatType = FT
 
 #####
 ##### Ocean-only (no sea ice: temperature is clipped at the freezing point) global simulation on ORCA2,
@@ -45,7 +46,7 @@ grid = ORCA2Grid(arch; z, major_basins = 1)
 # Biharmonic viscosity with a damping time of 40 days at the grid scale: ν = Az² / λ (m⁴ s⁻¹)
 @inline νhb(i, j, k, grid, λ) = Oceananigans.Operators.Az(i, j, k, grid, Center(), Center(), Center())^2 / λ
 νh = CenterField(grid)
-set!(νh, KernelFunctionOperation{Center, Center, Center}(νhb, grid, Float32(40days)))
+set!(νh, KernelFunctionOperation{Center, Center, Center}(νhb, grid, convert(FT, 40days)))
 horizontal_viscosity = HorizontalScalarBiharmonicDiffusivity(ν = νh)
 
 # Background diapycnal mixing from internal tides, Henyey et al. style latitude dependence (m² s⁻¹)
@@ -57,8 +58,8 @@ vertical_diffusivity = VerticalScalarDiffusivity(VerticallyImplicitTimeDiscretiz
 # The default isopycnal tensor and slope limiter are Float64 whatever the FloatType, which Metal rejects
 using Oceananigans.TurbulenceClosures: IsopycnalSkewSymmetricDiffusivity, SmallSlopeIsopycnalTensor, FluxTapering
 eddy_closure = IsopycnalSkewSymmetricDiffusivity(κ_skew = 500, κ_symmetric = 500, # m² s⁻¹
-                                                 isopycnal_tensor = SmallSlopeIsopycnalTensor(Float32),
-                                                 slope_limiter = FluxTapering(1f-2))
+                                                 isopycnal_tensor = SmallSlopeIsopycnalTensor(FT), # these are defaults but are not automatically converted for now
+                                                 slope_limiter = FluxTapering(convert(FT, 1e-2)))
 
 vertical_mixing = CATKEVerticalDiffusivity(VerticallyImplicitTimeDiscretization();
                                            maximum_tracer_diffusivity = 1,
@@ -67,39 +68,46 @@ vertical_mixing = CATKEVerticalDiffusivity(VerticallyImplicitTimeDiscretization(
 
 closure = (eddy_closure, vertical_mixing, horizontal_viscosity, vertical_diffusivity)
 
-free_surface       = SplitExplicitFreeSurface(grid; substeps = 60)
-momentum_advection = WENOVectorInvariant(order = 5)
-tracer_advection   = WENO(order = 5)
+using Oceananigans.TimeSteppers: AdaptiveVerticallyImplicitDiscretization
+time_discretization = AdaptiveVerticallyImplicitDiscretization(cfl = 0.5)
+
+free_surface       = SplitExplicitFreeSurface(grid; substeps = 200)
+momentum_advection = WENOVectorInvariant(order = 5; time_discretization)
+tracer_advection   = WENO(order = 5; time_discretization, boundary_scheme = UpwindBiased(order = 1))
 
 #####
 ##### Surface salinity restoring to monthly WOA (there is no sea ice, so this stands in for brine rejection and melt)
 #####
 
-# As in GlobalOcean (OMIPSimulations.salinity_surface_restoring): the series is built on the architecture, not the grid,
-# so it stays on WOA's own grid (which only reaches 1525 m) and is interpolated at the surface as the model runs.
-# The rate is a piston velocity over the top cell: 0.254 m day⁻¹ / Δz_top (s⁻¹)
 piston_velocity = 0.254 # m day⁻¹
 Δz_top = Oceananigans.Operators.Δzᶜᶜᶜ(1, 1, Nz, Oceananigans.Architectures.on_architecture(CPU(), grid))
 salinity = Metadata(:salinity; dataset = WOAMonthly())
-S_restoring = DatasetRestoring(salinity, arch; rate = piston_velocity / (Δz_top * days),
+S_restoring = DatasetRestoring(salinity, arch; rate = convert(FT, piston_velocity / (Δz_top * days)),
                                time_indices_in_memory = length(salinity))
+woa_salinity_fts_to_teos10!(S_restoring.field_time_series) # Practical → Absolute Salinity, as the model's S
 
 ocean = ocean_simulation(grid; Δt, momentum_advection, tracer_advection, free_surface, closure,
                          additional_surface_fluxes = (; S = SurfaceFluxRestoring(S_restoring)))
 
 #####
-##### Initial condition: annual WOA climatology
+##### Initial condition: as NumericalOcean, annual WOA converted to TEOS-10 (Θ, Sᴬ) with January WOA blended in above
+##### 1000 m (tapering to annual at the monthly climatology's ≈ 1500 m reach), see src/woa_teos10.jl
 #####
 
-set!(ocean.model, T = Metadatum(:temperature; dataset = WOAAnnual()),
-                  S = Metadatum(:salinity;    dataset = WOAAnnual()))
+T₀ = CenterField(grid)
+S₀ = CenterField(grid)
+set!(T₀, Metadatum(:temperature; dataset = WOAAnnual()))
+set!(S₀, Metadatum(:salinity;    dataset = WOAAnnual()))
+woa_to_teos10!(T₀, S₀)
+blend_monthly_initial_condition!(T₀, S₀, start_date, 1000) # blend depth (m)
+set!(ocean.model, T = T₀, S = S₀)
 
 #####
 ##### Atmosphere and radiation: repeat-year JRA55
 #####
 
 jra55_dir = joinpath("data", "JRA55")
-atmosphere = JRA55PrescribedAtmosphere(arch; dataset = RepeatYearJRA55(), dir = jra55_dir)
+atmosphere = JRA55PrescribedAtmosphere(arch; dataset = RepeatYearJRA55(), dir = jra55_dir, prefetch = false)
 radiation  = JRA55PrescribedRadiation(arch; dataset = RepeatYearJRA55(), dir = jra55_dir)
 
 #####
@@ -127,7 +135,7 @@ end
 add_callback!(simulation, progress, TimeInterval(10days))
 
 #####
-##### Output - snapshots (`TimeInterval`), see the note at the top of src/metal_hacks.jl
+##### Output - snapshots (`TimeInterval`), AveragedTimeInterval doesn't work on Metal
 #####
 
 ocean_outputs = merge(ocean.model.tracers, ocean.model.velocities)
