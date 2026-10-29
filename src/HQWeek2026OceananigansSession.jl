@@ -12,6 +12,7 @@ export sponge_coefficient
 export save_restart_state, load_restart_state!
 export alkalinity_release_tendency, alkalinity_release
 export PrescribedChlorophyllAttenuation
+export carbonate_sensitivities, CarbonateSensitivities
 
 # only with Metal in the environment (elsewhere `]rm Metal; ]add CUDA`)
 @static if !isnothing(Base.find_package("Metal"))
@@ -26,6 +27,7 @@ include("glorys_quarter_degree.jl")
 include("jra55_region.jl")
 include("boundary_functions.jl")
 include("ocean_only_gas_exchange.jl")
+include("carbonate_sensitivities.jl")
 include("restart_state.jl")
 include("alkalinity_release.jl")
 include("light_attenuation.jl")  # from NumericalOcean
