@@ -115,7 +115,7 @@ These are global ocean-only runs (no sea ice: temperature is clipped at the free
 |---|---|---|
 | `orca2_metal.jl` | Mac | Physics only, 1 year |
 | `orca2_metal_bgc.jl` | Mac | Plus `MITgcmDIC` biogeochemistry, 2 years. Writes `output/orca2_metal_bgc_restart.jld2` |
-| `orca2_metal_oae.jl` | Mac | Restarts from the BGC run and releases 1 Tmol of alkalinity over a year at five sites (Kuroshio, Tasmania, Labrador, California, Arabian Sea). **Run `orca2_metal_bgc.jl` first** |
+| `orca2_metal_oae.jl` | Mac | Restarts from the BGC run and releases 1 Tmol of alkalinity over a year at two sites (California and the Labrador Sea; three more are commented out in the script). **Run `orca2_metal_bgc.jl` first** |
 | `1degree.jl` | NVIDIA | ORCA1 with sea ice and BGC through `NumericalOcean`. This is a work in progress |
 | `download_jra55.jl` | — | Downloads the RYF JRA55 files into `data/JRA55`. You don't need it if you unpacked `data.tar.gz` |
 | `plot_surface.jl` | CPU | Plots the last surface snapshot of `orca2_metal.jl`. It shows why the tripolar grid can't be drawn as a plain map, then conservatively regrids temperature, salinity and surface speed to a regular 1/2° grid (land excluded via the wet fraction) and draws them on a Robinson projection. Saves `output/surface.png`. **Run `orca2_metal.jl` first** |

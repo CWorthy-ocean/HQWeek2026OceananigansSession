@@ -10,7 +10,7 @@ export RegionalJRA55
 export x_boundary, y_boundary, x_fixed_boundary, y_fixed_boundary, x_flather, y_flather, u_bottom_drag, v_bottom_drag, u_immersed_drag, v_immersed_drag
 export sponge_coefficient
 export save_restart_state, load_restart_state!
-export alkalinity_release_tendency, alkalinity_release
+export alkalinity_release_tendency, alkalinity_release, windowed_alkalinity_release
 export PrescribedChlorophyllAttenuation
 export carbonate_sensitivities, CarbonateSensitivities
 

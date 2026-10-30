@@ -36,3 +36,8 @@ end
 
 # The forcing: the stored tendency, on for the whole run
 @inline alkalinity_release(i, j, k, grid, clock, fields, tendency) = @inbounds tendency[i, j, k]
+
+# The forcing with parameters `(; tendency, start, stop)`: the stored tendency, on from `start` to `stop` (s), as in
+# 02_california_current/metal_alkalinity.jl
+@inline windowed_alkalinity_release(i, j, k, grid, clock, fields, p) =
+    @inbounds p.tendency[i, j, k] * (p.start <= clock.time < p.stop)

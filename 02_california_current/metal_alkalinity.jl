@@ -288,9 +288,8 @@ end
 alkalinity_release = (tendency = set!(CenterField(grid), release_tendency(on_architecture(CPU(), grid))),
                       start = Float32(release_start), stop = Float32(release_start + release_duration))
 
-@inline Alk_release(i, j, k, grid, clock, fields, p) = @inbounds p.tendency[i, j, k] * (p.start <= clock.time < p.stop)
-
-forcing = (; Alk2 = Forcing(Alk_release; discrete_form = true, parameters = alkalinity_release))
+# `windowed_alkalinity_release` (src/alkalinity_release.jl) is the stored tendency while `start <= t < stop`
+forcing = (; Alk2 = Forcing(windowed_alkalinity_release; discrete_form = true, parameters = alkalinity_release))
 
 #####
 ##### Ocean

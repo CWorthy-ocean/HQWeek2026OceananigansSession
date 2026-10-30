@@ -84,11 +84,13 @@ woa_salinity_fts_to_teos10!(S_restoring.field_time_series) # Practical → Absol
 ##### src/alkalinity_release.jl
 #####
 
-release_sites = (Kuroshio   = (134.5, 26.5),    # south-east of Japan, feeding the western boundary current
-                 Tasmania   = (141.5, -44.5),   # Southern Ocean: strong winds, deep mixing
-                 Labrador   = (-49.5, 55.5),    # deep water formation
-                 California = (-127.5, 40.5),   # eastern boundary upwelling
-                 Arabian    = (59.5, 13.5))     # western Arabian Sea: monsoonal circulation
+# Two sites, as each one adds a DIC/Alk copy and the model compiles much more slowly the more tracers it has (5 sites
+# took over an hour to compile on an M5). More can be added from the commented ones
+release_sites = (California = (-127.5, 40.5),   # eastern boundary upwelling
+                 Labrador   = (-49.5, 55.5))    # deep water formation
+              #  Kuroshio   = (134.5, 26.5),    # south-east of Japan, feeding the western boundary current
+              #  Tasmania   = (141.5, -44.5),   # Southern Ocean: strong winds, deep mixing
+              #  Arabian    = (59.5, 13.5))     # western Arabian Sea: monsoonal circulation
 
 Ncopies = length(release_sites) + 1   # copy 1 is the control
 DIC_names = ntuple(n -> Symbol(:DIC, n), Ncopies)
