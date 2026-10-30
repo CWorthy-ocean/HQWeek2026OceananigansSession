@@ -138,11 +138,14 @@ add_callback!(simulation, progress, TimeInterval(10days))
 ##### Output - snapshots (`TimeInterval`), AveragedTimeInterval doesn't work on Metal
 #####
 
+output_dir = joinpath(@__DIR__, "output")
+mkpath(output_dir)   # not in the repository, so missing in a fresh clone
+
 ocean_outputs = merge(ocean.model.tracers, ocean.model.velocities)
 
 ocean.output_writers[:surface] = JLD2Writer(ocean.model, ocean_outputs;
                                             schedule = TimeInterval(5days),
-                                            filename = "orca2_metal_surface",
+                                            filename = joinpath(output_dir, "orca2_metal_surface"),
                                             indices = (:, :, grid.Nz),
                                             overwrite_files = true)
 

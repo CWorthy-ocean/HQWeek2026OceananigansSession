@@ -195,11 +195,14 @@ add_callback!(simulation, progress, TimeInterval(10days))
 ##### Output - snapshots (`TimeInterval`), AveragedTimeInterval doesn't work on Metal
 #####
 
+output_dir = joinpath(@__DIR__, "output")
+mkpath(output_dir)   # not in the repository, so missing in a fresh clone
+
 ocean_outputs = merge(ocean.model.tracers, ocean.model.velocities)
 
 ocean.output_writers[:surface] = JLD2Writer(ocean.model, ocean_outputs;
                                             schedule = TimeInterval(1days),
-                                            filename = joinpath(@__DIR__, "output", "orca2_metal_bgc_surface"),
+                                            filename = joinpath(output_dir, "orca2_metal_bgc_surface"),
                                             indices = (:, :, grid.Nz),
                                             overwrite_files = true)
 
@@ -207,10 +210,10 @@ ocean.output_writers[:surface] = JLD2Writer(ocean.model, ocean_outputs;
 J = coupled_model.interfaces.net_fluxes.ocean
 ocean.output_writers[:fluxes] = JLD2Writer(ocean.model, (; DIC_flux = J.DIC, O₂_flux = J.O₂);
                                            schedule = TimeInterval(1days),
-                                           filename = joinpath(@__DIR__, "output", "orca2_metal_bgc_fluxes"),
+                                           filename = joinpath(output_dir, "orca2_metal_bgc_fluxes"),
                                            overwrite_files = true)
 
 run!(simulation)
 
 # Final state for the alkalinity-release runs (orca2_metal_oae.jl), see src/restart_state.jl
-save_restart_state(joinpath(@__DIR__, "output", "orca2_metal_bgc_restart.jld2"), ocean)
+save_restart_state(joinpath(output_dir, "orca2_metal_bgc_restart.jld2"), ocean)

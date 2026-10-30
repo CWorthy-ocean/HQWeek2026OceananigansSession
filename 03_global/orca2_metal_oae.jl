@@ -196,24 +196,27 @@ J = coupled_model.interfaces.net_fluxes.ocean # mmol m⁻² s⁻¹, positive out
 ΔDIC = NamedTuple(Symbol(:ΔDIC_, name) => c[DIC_names[n + 1]] - c.DIC1 for (n, name) in enumerate(keys(release_sites)))
 ΔCO₂_flux = NamedTuple(Symbol(:ΔCO₂_flux_, name) => J[DIC_names[n + 1]] - J.DIC1 for (n, name) in enumerate(keys(release_sites)))
 
+output_dir = joinpath(@__DIR__, "output")
+mkpath(output_dir)   # not in the repository, so missing in a fresh clone
+
 surface = merge((T = c.T, S = c.S, u = ocean.model.velocities.u, v = ocean.model.velocities.v,
                  PO₄ = c.PO₄, DIC1 = c.DIC1, Alk1 = c.Alk1, O₂ = c.O₂), ΔAlk, ΔDIC)
 
 ocean.output_writers[:surface] = JLD2Writer(ocean.model, surface;
                                             schedule = TimeInterval(1days),
-                                            filename = joinpath(@__DIR__, "output", "orca2_metal_oae_surface"),
+                                            filename = joinpath(output_dir, "orca2_metal_oae_surface"),
                                             indices = (:, :, grid.Nz),
                                             overwrite_files = true)
 
 ocean.output_writers[:fluxes] = JLD2Writer(ocean.model, merge((; DIC1_flux = J.DIC1), ΔCO₂_flux);
                                            schedule = TimeInterval(1days),
-                                           filename = joinpath(@__DIR__, "output", "orca2_metal_oae_fluxes"),
+                                           filename = joinpath(output_dir, "orca2_metal_oae_fluxes"),
                                            overwrite_files = true)
 
 # Full-depth perturbations, monthly snapshots (how the alkalinity spreads and is subducted)
 ocean.output_writers[:interior] = JLD2Writer(ocean.model, merge(ΔAlk, ΔDIC);
                                              schedule = TimeInterval(365days / 12),
-                                             filename = joinpath(@__DIR__, "output", "orca2_metal_oae_interior"),
+                                             filename = joinpath(output_dir, "orca2_metal_oae_interior"),
                                              overwrite_files = true)
 
 run!(simulation)
