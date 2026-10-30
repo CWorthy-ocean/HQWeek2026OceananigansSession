@@ -24,6 +24,7 @@
 # 12. Float32 ZWENO weights that cannot overflow: τ / (β + ϵ) capped before squaring.
 # 13. OceanBioME air–sea O₂ and CO₂ exchange built in the grid's float type (OceanBioME defaults to Float64).
 # 12. Float32 carbon chemistry: the seawater density and the boron, sulfate and fluoride totals in the CO₂ gas exchange.
+# 14. `Time{Float64}` adapted to a Metal kernel: Float32 (e.g. the river discharge scatter).
 
 using Metal: Metal, MtlDeviceVector, MtlDeviceArray
 using Oceananigans
@@ -382,3 +383,15 @@ end
     @inbounds pH[i, j, 1] = pHⁿ
     return CO₂
 end
+
+#####
+##### 14. Float64 `Time` in Metal kernels
+#####
+
+# NumericalEarth's river routing (`interpolate_state!` for a `RoutedPrescribedLand`, Lands/river_routing.jl:387)
+# passes `Time(coupled_model.clock.time)`, the Float64 clock time, to `_scatter_river_discharge!`, which interpolates
+# the discharge series at it, so the kernel fails ("unsupported use of double value"). Item 9 converts a `Clock`, not
+# a bare `Time`; here every `Time{Float64}` adapted to a Metal kernel is converted to Float32 as well.
+using Oceananigans.Units: Time
+
+Adapt.adapt_structure(to::Metal.Adaptor, t::Time{Float64}) = Time(convert(Float32, t.time))
